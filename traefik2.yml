@@ -1,0 +1,185 @@
+# docker network create traefik
+# CORREO='cuenta@gmail.com' SERV='subdominio.duckdns.org' docker-compose -f traefik2.yml up -d --scale whoami=2
+
+# https://www.smarthomebeginner.com/traefik-2-docker-tutorial/
+  #   curl --insecure -H Host:whoami.subdominio.duckdns.org https://192.168.1.31
+  #   curl --insecure -H Host:portainer.subdominio.duckdns.org https://192.168.1.31
+  #   curl --insecure -H Host:traefik.subdominio.duckdns.org https://192.168.1.31
+  #   curl --insecure -H Host:subdominio.duckdns.org https://192.168.1.31
+
+version: '3'
+
+services:
+  traefik: # https://github.com/CVJoint/traefik2/blob/master/ymlfiles/traefik.yml
+    # The official v2 Traefik docker image
+    image: "traefik:2.3.7"
+    container_name: "traefik"
+    restart: unless-stopped
+    # Enables the web UI and tells Traefik to listen to docker
+    # command: --api.insecure=true --providers.docker #--docker.domain=${SERV}
+    command:
+      # - "--docker.domain=${SERV}"
+      # - "--log.level=DEBUG"
+      - "--api"
+     # - "--api.insecure=true"
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+ 
+   #    --entrypoints.foo.http.redirections.entryPoint.to=web-secure
+#--entrypoints.foo.http.redirections.entryPoint.scheme=https
+#--entrypoints.foo.http.redirections.entrypoint.permanent=true
+ 
+      - "--certificatesResolvers.mytlschallenge.acme.httpChallenge=true"
+      - "--certificatesResolvers.mytlschallenge.acme.httpChallenge.entrypoint=web"
+      - "--certificatesResolvers.mytlschallenge.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesResolvers.mytlschallenge.acme.email=${CORREO}"
+      - "--certificatesResolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json"
+    #  - "--certificatesResolvers.mytlschallenge.acme.tlschallenge.entrypoint=websecure"
+      
+    labels:
+      - "traefik.enable=true"
+          # HTTP-to-HTTPS Redirect
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=websecure"
+            # HTTP Routers
+      - "traefik.http.routers.traefik.entrypoints=web"
+  #    - "traefik.http.routers.traefik.rule=Host(`traefik.$SERV`)"
+      - "traefik.http.routers.traefik.rule=Host(`$SERV`) && (PathPrefix(`/traefik`) || PathPrefix(`/api`))"
+      - "traefik.http.middlewares.traefik-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.traefik.middlewares=traefik-https-redirect"
+      
+      - "traefik.http.routers.traefik-secure.entrypoints=websecure"
+  #    - "traefik.http.routers.traefik-secure.rule=Host(`traefik.$SERV`)"
+      - "traefik.http.routers.traefik-secure.rule=Host(`$SERV`) && (PathPrefix(`/traefik`) || PathPrefix(`/api`))"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=mytlschallenge"
+      - "traefik.http.routers.traefik-secure.service=api@internal"
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=cuenta:Contrasenna"
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-auth"
+     
+      - "traefik.http.routers.traefik.tls.domains[0].main=$SERV"
+      - "traefik.http.routers.traefik.tls.domains[0].sans=*.$SERV"
+
+      
+
+    ports:
+      # The HTTP port
+      - "80:80"
+      - "443:443"
+      # The Web UI (enabled by --api.insecure=true)
+     # - "8080:8080"
+    volumes:
+      # So that Traefik can listen to the Docker events
+      #- "./letsencrypt:/letsencrypt"
+      # - "/var/run/docker.sock:/var/run/docker.sock:ro"      # ...
+      - "/var/run/docker.sock:/var/run/docker.sock"      # ...
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - traefik
+      - default
+    logging:
+      options:
+        max-size: '12m'
+        max-file: '5'
+      driver: json-file
+      
+  main-app:
+    image: httpd
+    container_name: httpd
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app.rule=Host(`${SERV}`)"
+      - "traefik.http.routers.app.entrypoints=websecure"
+      - "traefik.http.routers.app.tls.certresolver=mytlschallenge"
+    volumes:
+      - "./www/:/usr/local/apache2/htdocs/"
+
+  whoami:
+    # A container that exposes an API to show its IP address
+    image: containous/whoami
+    # NOOOOOO si no, no se puede escalar...          container_name: "whoami"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${SERV}`)"
+#      - "traefik.http.routers.whoami.rule=Host(`company.org`) && PathPrefix(`/whoami`)"
+#      - "traefik.http.routers.whoami.rule=Host(`${SERV}`) && PathPrefix(`/whoami`)"
+#      - "traefik.http.routers.whoami.middlewares=whoami-stripprefix"
+#      - "traefik.http.middlewares.whoami-stripprefix.stripprefix.prefixes=/whoami"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=mytlschallenge"
+      
+    networks:
+      - traefik
+      - default
+
+  portainer: # https://www.smarthomebeginner.com/traefik-2-docker-tutorial/#Portainer_with_Traefik_2_and_OAuth
+    image: portainer/portainer
+    container_name: portainer
+    restart: unless-stopped
+    command: -H unix:///var/run/docker.sock
+    networks:
+      - traefik
+      - default
+    ports:
+      - "9000:9000"
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      - "traefik.enable=true"
+      ## HTTP Routers
+      - "traefik.http.routers.portainer-rtr.entrypoints=websecure"
+    #  - "traefik.http.routers.portainer-rtr.rule=Host(`Host(`portainer.${SERV}`)"
+      - "traefik.http.routers.portainer-rtr.rule=Host:${SERV}; PathPrefixStrip: /portainer"
+      - "traefik.port=9000"
+      - "traefik.http.services.portainer-rtr.loadbalancer.server.port=9000"
+      - "traefik.http.services.portainer-rtr.service=portainer-rtr"
+      #- "traefik.http.routers.portainer-rtr.rule=Host(`${SERV}`) && PathPrefix(`/pt`)" # Host(`portainer.${SERV}`)"
+      #- "traefik.http.routers.pt.middlewares=pt-stripprefix"
+      #- "traefik.http.middlewares.pt-stripprefix.stripprefix.prefixes=/pt"
+      - "traefik.http.routers.portainer-rtr.tls=true"
+      - "traefik.http.routers.portainer-rtr.tls.certresolver=mytlschallenge"
+      # - "traefik.http.routers.portainer-rtr.domains[0].sans=*.${SERV}"
+      ## Middlewares
+      - "traefik.http.routers.portainer-rtr.middlewares=chain-no-auth@file" # No Authentication
+      #- "traefik.http.routers.portainer-rtr.middlewares=chain-basic-auth@file" # Basic Authentication
+      #- "traefik.http.routers.portainer-rtr.middlewares=chain-oauth@file" # Google OAuth 2.0
+      ## HTTP Services
+#      - "traefik.http.routers.portainer-rtr.service=portainer-rtr"
+
+      - "traefik.docker.network=traefik"
+      
+#These can go either in the Traefic labels or in with portainer
+      - "traefik.http.middlewares.strip-prefix-1.redirectregex.regex=^(https?://[^/]+/[a-z0-9_]+)$$"
+      - "traefik.http.middlewares.strip-prefix-1.redirectregex.replacement=$${1}/"
+      - "traefik.http.middlewares.strip-prefix-1.redirectregex.permanent=true"
+      - "traefik.http.middlewares.strip-prefix-2.stripprefixregex.regex=/[a-z0-9_]+"
+      
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+    security_opt:
+      - no-new-privileges:true
+#    environment:
+#      - TZ=$TZ
+    networks:
+      - traefik
+      - default
+
+volumes:
+  portainer_data:
+      
+networks:
+  traefik:
+    external:
+      name: traefik
+  default:
+    driver: bridge      
+      
+      
+      

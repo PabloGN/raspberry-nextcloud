@@ -1,0 +1,97 @@
+### https://github.com/nextcloud/docker
+## https://blog.ssdnodes.com/blog/installing-nextcloud-docker/
+# https://docs.nextcloud.com/server/16/admin_manual/configuration_server/config_sample_php_parameters.html
+
+# SERV='localhost' docker-compose -f docker-compose-nextcloud.yml up -d
+# SERV='localhost' docker-compose -f docker-compose-nextcloud.yml ps
+# SERV='localhost' docker-compose -f docker-compose-nextcloud.yml logs nextcloud
+# SERV='localhost' docker-compose -f docker-compose-nextcloud.yml exec nextcloud bash
+# SERV='subdominio.duckdns.org' docker-compose -f docker-compose-nextcloud.yml up -d
+# SERV='subdominio.duckdns.org' docker-compose -f docker-compose-nextcloud.yml ps
+# SERV='subdominio.duckdns.org' docker-compose -f docker-compose-nextcloud.yml logs nextcloud
+# SERV='subdominio.duckdns.org' docker-compose -f docker-compose-nextcloud.yml exec nextcloud bash
+
+# curl --insecure -H Host:nube.subdominio.duckdns.org https://192.168.1.31/
+
+version: '3.3'
+
+volumes:
+  nextcloud:
+  ncdb:
+
+services:
+  ncdb: ############# Raspberry Pi #################################
+    image: hypriot/rpi-mysql # https://techblog.travelhackfun.com/2021/04/18/set-up-nextcloud-with-docker/
+ #   image: tobi312/rpi-mariadb # mariadb:10 https://github.com/Tob1asDocker/rpi-mariadb
+    container_name: ncdb
+    command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW
+    restart: unless-stopped
+    labels:
+       - traefik.enable=false
+       - traefik.docker.network=traefik
+    volumes:
+      - ncdb:/var/lib/mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=Contrasenna
+      - MYSQL_PASSWORD=Contrasenna
+      - MYSQL_DATABASE=nextcloud
+      - MYSQL_USER=nextcloud
+    networks:
+       - nc_back
+
+  nextcloud:
+    image: nextcloud
+    container_name: nextcloud
+    depends_on:
+      - ncdb
+    volumes:
+      - nextcloud:/var/www/html
+    labels:
+      - "traefik.enable=true"
+      - "traefik.port=80"
+      - "traefik.backend=nextcloud"
+#      - "traefik.frontend.rule=Host:${SERV}; PathPrefixStrip:/nextcloud"
+ #      - "traefik.frontend.rule=Host:nube.${SERV}"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.middlewares.nextcloud-caldav.redirectregex.permanent=true"
+      - "traefik.http.middlewares.nextcloud-caldav.redirectregex.regex=^https://(.*)/.well-known/(card|cal)dav"
+      - "traefik.http.middlewares.nextcloud-caldav.redirectregex.replacement=https://$${1}/remote.php/dav/"
+      - "traefik.http.middlewares.nextcloud-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.nextcloud-http.entrypoints=web"
+      - "traefik.http.routers.nextcloud-http.rule=Host(`nube.${SERV}`)"
+      - "traefik.http.routers.nextcloud-http.middlewares=nextcloud-https@docker"
+      - "traefik.http.routers.nextcloud.entrypoints=web-secure"
+      - "traefik.http.routers.nextcloud.rule=Host(`nube.subdominio.duckdns.org`)"
+      - "traefik.http.routers.nextcloud.middlewares=nextcloud-caldav@docker"
+      - "traefik.http.routers.nextcloud.tls=true"
+      - "traefik.http.routers.nextcloud.tls.certresolver=default"
+
+    environment:
+      - NEXTCLOUD_ADMIN_USER=Pablo
+      - NEXTCLOUD_ADMIN_PASSWORD=/run/secrets/nube_passwd
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_SECURE=ssl
+      - SMTP_PORT=465
+      - SMTP_NAME=cuenta@gmail.com
+      - SMTP_PASSWORD=/run/secrets/smtp_passwd
+      - LC_ALL=C.UTF-8
+      - TZ=Europe/Madrid
+    secrets:
+      - nube_passwd
+      - smtp_passwd
+    restart: unless-stopped
+    networks:
+      - traefik
+      - nc_back
+secrets:
+    smtp_passwd:
+        file: smtp_passwd.txt
+    nube_passwd:
+        file: nube_passwd.txt
+        
+networks:
+  nc_back:
+    driver: bridge
+  traefik:
+    external:
+      name: traefik
